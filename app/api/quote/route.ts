@@ -1,11 +1,7 @@
 import { NextRequest } from "next/server";
+import { QuoteResponse, QuoteResponseItem } from "../../types";
 
-type QuoteResult = {
-  symbol: string;
-  companyName: string;
-  bid: number;
-  ask: number;
-};
+const token = process.env.BENZINGA_API_KEY || "";
 
 function coerceNumber(value: unknown): number | undefined {
   if (typeof value === "number" && !Number.isNaN(value)) return value;
@@ -16,76 +12,36 @@ function coerceNumber(value: unknown): number | undefined {
   return undefined;
 }
 
-function extractQuoteFromUnknown(
-  data: unknown,
-  symbol: string
-): QuoteResult | null {
-  // Common shapes we might encounter
-  const tryMap = (q: unknown): QuoteResult | null => {
-    if (!q || typeof q !== "object") return null;
-    const obj = q as Record<string, unknown>;
-    const bid =
-      coerceNumber(obj.bid) ??
-      coerceNumber(obj.bidPrice) ??
-      coerceNumber(obj.bid_price) ??
-      coerceNumber(obj.bidprice);
-    const ask =
-      coerceNumber(obj.ask) ??
-      coerceNumber(obj.askPrice) ??
-      coerceNumber(obj.ask_price) ??
-      coerceNumber(obj.askprice);
-    const companyName =
-      (obj.name as string | undefined) ??
-      (obj.companyName as string | undefined) ??
-      (obj.company_name as string | undefined) ??
-      "";
-    const sym = (
-      (obj.symbol as string | undefined) ??
-      (obj.ticker as string | undefined) ??
-      symbol ??
-      ""
-    )
-      .toString()
-      .toUpperCase();
-    if (typeof bid === "number" && typeof ask === "number" && sym) {
-      return {
-        symbol: sym,
-        companyName: companyName || sym,
-        bid,
-        ask,
-      };
-    }
-    return null;
-  };
+function coerceString(value: unknown, fallback: string): string {
+  if (typeof value === "string") return value;
+  if (typeof value === "number") return String(value);
+  return fallback;
+}
 
-  // Array of quotes
-  if (Array.isArray(data)) {
-    for (const item of data) {
-      const mapped = tryMap(item);
-      if (mapped && mapped.symbol.toUpperCase() === symbol.toUpperCase()) {
-        return mapped;
-      }
-    }
-    // Fallback to first valid
-    for (const item of data) {
-      const mapped = tryMap(item);
-      if (mapped) return mapped;
-    }
-  }
-
-  // Object keyed by symbol
-  if (data && typeof data === "object") {
-    const direct = tryMap(data);
-    if (direct) return direct;
-    const rec = data as Record<string, unknown>;
-    const keys = Object.keys(rec);
-    for (const key of keys) {
-      const mapped = tryMap((rec as Record<string, unknown>)[key]);
-      if (mapped) return mapped;
-    }
-  }
-
-  return null;
+function extractQuoteFromResponse(data: QuoteResponse): QuoteResponseItem[] {
+  return Object.entries(data).map(
+    ([symbol, quote]): QuoteResponseItem => ({
+      symbol: symbol.toUpperCase(),
+      companyName: quote.name,
+      bid: coerceNumber(quote.bidPrice) || 0,
+      ask: coerceNumber(quote.askPrice) || 0,
+      last: coerceNumber(quote.lastTradePrice) || 0,
+      change: coerceNumber(quote.change) || 0,
+      changePercent: coerceNumber(quote.changePercent) || 0,
+      open: coerceNumber(quote.open) || 0,
+      high: coerceNumber(quote.high) || 0,
+      low: coerceNumber(quote.low) || 0,
+      previousClosePrice: coerceNumber(quote.previousClosePrice) || 0,
+      volume: coerceNumber(quote.volume) || 0,
+      fiftyTwoWeekHigh: coerceNumber(quote.fiftyTwoWeekHigh) || 0,
+      fiftyTwoWeekLow: coerceNumber(quote.fiftyTwoWeekLow) || 0,
+      marketCap: coerceNumber(quote.marketCap) || 0,
+      currency: coerceString(
+        (quote as unknown as Record<string, unknown>)?.currency,
+        "USD"
+      ),
+    })
+  );
 }
 
 export async function GET(req: NextRequest) {
@@ -95,23 +51,10 @@ export async function GET(req: NextRequest) {
     return Response.json({ error: "Missing symbol" }, { status: 400 });
   }
 
-  const token = process.env.BENZINGA_API_KEY || "";
-
-  // Try a couple of likely endpoints; map flexibly to bid/ask
-  const candidate: {
-    url: string;
-    qs: Record<string, string>;
-  } = {
-    // Delayed Quote - documented to use `token` query param
-    url: "https://api.benzinga.com/api/v2/quoteDelayed",
-    qs: { symbols: symbol, token },
-  };
-
   try {
-    const url = new URL(candidate.url);
-    Object.entries(candidate.qs).forEach(([k, v]) =>
-      url.searchParams.set(k, v)
-    );
+    const url = new URL("https://api.benzinga.com/api/v2/quoteDelayed");
+    url.searchParams.set("symbols", symbol);
+    url.searchParams.set("token", token);
     const res = await fetch(url.toString(), { next: { revalidate: 0 } });
     if (!res.ok) {
       return Response.json(
@@ -119,58 +62,12 @@ export async function GET(req: NextRequest) {
         { status: 500 }
       );
     }
-    const data = await res.json().catch(() => ({}));
-    const mapped = extractQuoteFromUnknown(data, symbol);
-    if (mapped) {
-      // If companyName is missing, enrich via Fundamentals
-      if (!mapped.companyName || mapped.companyName === mapped.symbol) {
-        try {
-          const fundamentalsUrl = new URL(
-            "https://api.benzinga.com/api/v1/fundamentals"
-          );
-          fundamentalsUrl.searchParams.set("symbols", symbol);
-          fundamentalsUrl.searchParams.set("token", token);
-          const fRes = await fetch(fundamentalsUrl.toString(), {
-            next: { revalidate: 0 },
-          });
-          if (fRes.ok) {
-            const fData = (await fRes.json()) as unknown;
-            let name: string | undefined;
-            if (fData && typeof fData === "object") {
-              const rec = fData as Record<string, unknown>;
-              const bySymbol = (rec[symbol] || rec[symbol.toUpperCase()]) as
-                | Record<string, unknown>
-                | undefined;
-              if (bySymbol && typeof bySymbol === "object") {
-                const company = (bySymbol["company"] || bySymbol["Company"]) as
-                  | Record<string, unknown>
-                  | undefined;
-                if (company && typeof company === "object") {
-                  name = (company["name"] || company["Name"]) as
-                    | string
-                    | undefined;
-                }
-                if (!name) {
-                  name = (bySymbol["name"] || bySymbol["Name"]) as
-                    | string
-                    | undefined;
-                }
-              }
-            }
-            if (name) {
-              mapped.companyName = name;
-            }
-          }
-        } catch {
-          // ignore enrichment errors
-        }
-      }
-      return Response.json(mapped, { status: 200 });
+    const data = (await res.json().catch(() => ({}))) as QuoteResponse;
+    const quote = extractQuoteFromResponse(data);
+    if (!quote) {
+      return Response.json({ error: "Quote not found" }, { status: 404 });
     }
-    return Response.json(
-      { error: "Quote fields not found in response" },
-      { status: 404 }
-    );
+    return Response.json(quote, { status: 200 });
   } catch (err) {
     return Response.json(
       { error: err instanceof Error ? err.message : "Unknown error" },

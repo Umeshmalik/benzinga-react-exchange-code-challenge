@@ -1,6 +1,6 @@
 import { cookies } from "next/headers";
 import { NextRequest } from "next/server";
-import type { Portfolio } from "./types";
+import type { Portfolio, Transaction } from "../../types";
 
 const COOKIE_NAME = "bz_portfolio";
 const INITIAL_CASH = 100_000;
@@ -9,22 +9,28 @@ async function readPortfolioFromCookie(): Promise<Portfolio> {
   const store = await cookies();
   const raw = store.get(COOKIE_NAME)?.value;
   if (!raw) {
-    return { cash: INITIAL_CASH, holdings: [] };
+    return { cash: INITIAL_CASH, holdings: [], transactions: [] };
   }
   try {
-    const parsed = JSON.parse(raw) as Portfolio;
+    const parsed = JSON.parse(raw) as Partial<Portfolio>;
     if (
       typeof parsed === "object" &&
       parsed &&
       typeof parsed.cash === "number" &&
       Array.isArray(parsed.holdings)
     ) {
-      return parsed;
+      return {
+        cash: parsed.cash,
+        holdings: parsed.holdings,
+        transactions: Array.isArray(parsed.transactions)
+          ? parsed.transactions
+          : [],
+      } as Portfolio;
     }
   } catch {
     // ignore
   }
-  return { cash: INITIAL_CASH, holdings: [] };
+  return { cash: INITIAL_CASH, holdings: [], transactions: [] };
 }
 
 async function writePortfolioToCookie(p: Portfolio) {
@@ -54,7 +60,11 @@ export async function POST(req: NextRequest) {
   const portfolio = await readPortfolioFromCookie();
 
   if (action === "reset") {
-    const reset: Portfolio = { cash: INITIAL_CASH, holdings: [] };
+    const reset: Portfolio = {
+      cash: INITIAL_CASH,
+      holdings: [],
+      transactions: [],
+    };
     await writePortfolioToCookie(reset);
     return Response.json(reset);
   }
@@ -95,6 +105,15 @@ export async function POST(req: NextRequest) {
       if (companyName) existing.companyName = companyName;
     }
     portfolio.cash -= total;
+    const buyTx: Transaction = {
+      timestamp: new Date().toISOString(),
+      action: "buy",
+      symbol: String(symbol).toUpperCase(),
+      companyName: companyName || symbol,
+      price: px,
+      quantity: qty,
+    };
+    portfolio.transactions.push(buyTx);
     await writePortfolioToCookie(portfolio);
     return Response.json(portfolio);
   }
@@ -128,6 +147,15 @@ export async function POST(req: NextRequest) {
       portfolio.holdings.splice(idx, 1);
     }
     portfolio.cash += proceeds;
+    const sellTx: Transaction = {
+      timestamp: new Date().toISOString(),
+      action: "sell",
+      symbol: String(symbol).toUpperCase(),
+      companyName: pos.companyName,
+      price: px,
+      quantity: qty,
+    };
+    portfolio.transactions.push(sellTx);
     await writePortfolioToCookie(portfolio);
     return Response.json(portfolio);
   }

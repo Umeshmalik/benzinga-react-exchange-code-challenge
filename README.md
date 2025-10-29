@@ -1,36 +1,97 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+## Benzinga React Exchange Code Challenge
 
-## Getting Started
+A simple stock portfolio simulator built with Next.js (App Router) that trades using Benzinga's Delayed Quote API. Users start with $100,000 cash, can look up symbols, buy at the current ask, sell at the current bid, and track holdings and transactions. Data persists in an httpOnly cookie.
 
-First, run the development server:
+Documentation reference: [Benzinga APIs Home](https://docs.benzinga.com/home)
+
+## Features
+
+- Inline symbol lookup on the homepage (no redirect)
+- Buy at ask and sell at bid with validations (no negative cash, no shorting)
+- Portfolio with cash balance and holdings; live value range per holding (bid–ask)
+- Dedicated stock page with full quote details and direct trading
+- Complete transaction log and per-symbol summary (invested, proceeds, P/L)
+- Server API routes for quotes and portfolio; cookie-backed persistence
+- Modular UI components in `app/components/`
+
+## Tech Stack
+
+- Next.js 16 (App Router), React 19, TypeScript
+- Tailwind CSS (Next 14/15+ modern setup)
+- Server routes under `app/api/*`
+
+## Prerequisites
+
+- Node.js 18+ (recommended)
+- pnpm installed (project uses pnpm)
+- A Benzinga API key with access to Delayed Quote
+
+## Environment Variables
+
+Create `.env.local` in the project root and add:
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+BENZINGA_API_KEY=your_benzinga_api_key
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Local Development
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```bash
+pnpm install
+pnpm dev
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Then open <http://localhost:3000>
 
-## Learn More
+## How to Use
 
-To learn more about Next.js, take a look at the following resources:
+1. On the homepage:
+   - Enter a symbol (e.g., AAPL) and click Lookup to view bid/ask, last, change, and other details
+   - Enter a Quantity and click Buy @ Ask or Sell @ Bid
+   - See cash, holdings, and live value ranges; click View to open the stock’s page
+2. On the stock page (`/stock/[symbol]`):
+   - Trade the focused symbol directly
+   - Review a summary of all transactions, purchase prices, and full transaction history
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## API Routes (Internal)
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+- GET `/api/quote?symbol=AAPL` or `/api/quote?symbol=AAPL,MSFT` → returns an array of items with:
+  - `symbol`, `companyName`, `bid`, `ask`, `last`, `change`, `changePercent`, `open`, `high`, `low`, `previousClosePrice`, `volume`, `fiftyTwoWeekHigh`, `fiftyTwoWeekLow`, `marketCap`, `currency`
+- GET `/api/portfolio` → returns current `cash`, `holdings`, and `transactions`
+- POST `/api/portfolio` → body JSON:
+  - `{ action: "buy", symbol, companyName, price, quantity }`
+  - `{ action: "sell", symbol, price, quantity }`
+  - `{ action: "reset" }`
 
-## Deploy on Vercel
+Notes:
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+- The upstream quote request is proxied server-side and uses the `BENZINGA_API_KEY` via the `token` query param.
+- Holdings and transactions are stored in an httpOnly cookie named `bz_portfolio`.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Project Structure
+
+- `app/page.tsx`: Home (lookup, trade panel, portfolio)
+- `app/stock/[symbol]/page.tsx`: Stock detail page (focused trading, summaries)
+- `app/components/*`: Reusable UI (lookup form, quote overview, trade panel, cash card, portfolio list, activity section)
+- `app/api/quote/route.ts`: Quote proxy (Benzinga Delayed Quote)
+- `app/api/portfolio/route.ts`: Portfolio storage and trade logic
+- `app/types.ts`: Shared types (`Portfolio`, `Holding`, `Transaction`, `QuoteResponseItem`)
+
+## Scripts
+
+```bash
+pnpm dev      # start dev server
+pnpm build    # build for production
+pnpm start    # start production server (after build)
+pnpm lint     # run eslint
+```
+
+## Deployment
+
+Any Node host is fine (Vercel recommended). Ensure `BENZINGA_API_KEY` is set in your deployment environment.
+
+## Notes & Constraints
+
+- Infinite size assumption at current bid/ask; no shorting (as required by the challenge)
+- Basic error handling for invalid symbols and upstream errors
+- API key is only used server-side via internal `/api/quote`
